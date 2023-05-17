@@ -3,15 +3,19 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 type Server struct {
-	n         *maelstrom.Node
-	neighbors []string
+	n *maelstrom.Node
 
-	msgs map[int]bool
+	neighbors   []string
+	neighborsMu sync.Mutex
+
+	msgs   map[int]bool
+	msgsMu sync.RWMutex
 }
 
 func NewServer() *Server {
@@ -35,7 +39,9 @@ func (s *Server) broadcastHandler(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &inputBody); err != nil {
 		return err
 	}
+	s.msgsMu.Lock()
 	s.msgs[inputBody.Message] = true
+	s.msgsMu.Unlock()
 
 	outputBody := BroadcastOutput{
 		Type: "broadcast_ok",
@@ -59,9 +65,11 @@ func (s *Server) readHandler(msg maelstrom.Message) error {
 	}
 
 	messages := []int{}
+	s.msgsMu.RLock()
 	for msg := range s.msgs {
 		messages = append(messages, msg)
 	}
+	s.msgsMu.RUnlock()
 
 	outputBody := ReadOutput{
 		Type:     "read_ok",
@@ -84,7 +92,9 @@ func (s *Server) topologyHandler(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &inputBody); err != nil {
 		return err
 	}
+	s.neighborsMu.Lock()
 	s.neighbors = inputBody.Topology[s.n.ID()]
+	s.neighborsMu.Unlock()
 
 	outputBody := TopologyOutput{
 		Type: "topology_ok",
