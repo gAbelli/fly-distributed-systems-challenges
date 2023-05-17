@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -148,17 +149,27 @@ func (s *Server) pollHandler(msg maelstrom.Message) error {
 		return err
 	}
 	res := make(map[string][][2]int)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for key, offset := range inputBody.Offsets {
 		i := offset
-		for {
-			val, err := s.kv.ReadInt(context.Background(), fmt.Sprintf("%v_%d", key, i))
-			if err != nil {
-				break
+		key := key
+		wg.Add(1)
+		go func() {
+			for {
+				val, err := s.kv.ReadInt(context.Background(), fmt.Sprintf("%v_%d", key, i))
+				if err != nil {
+					break
+				}
+				mu.Lock()
+				res[key] = append(res[key], [2]int{i, val})
+				mu.Unlock()
+				i++
 			}
-			res[key] = append(res[key], [2]int{i, val})
-			i++
-		}
+			wg.Done()
+		}()
 	}
+	wg.Wait()
 
 	outputBody := PollOutput{
 		Type: "poll_ok",
@@ -181,8 +192,17 @@ func (s *Server) commitOffsetsHandler(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &inputBody); err != nil {
 		return err
 	}
+	errChan := make(chan error, len(inputBody.Offsets))
 	for key, offset := range inputBody.Offsets {
-		err := s.kv.Write(context.Background(), fmt.Sprintf("committed_%v", key), offset)
+		key := key
+		offset := offset
+		go func() {
+			err := s.kv.Write(context.Background(), fmt.Sprintf("committed_%v", key), offset)
+			errChan <- err
+		}()
+	}
+	for range inputBody.Offsets {
+		err := <-errChan
 		if err != nil {
 			return err
 		}
@@ -210,10 +230,24 @@ func (s *Server) listCommittedOffsetsHandler(msg maelstrom.Message) error {
 		return err
 	}
 	res := make(map[string]int)
+	var mu sync.Mutex
+	errChan := make(chan error, len(inputBody.Keys))
 	for _, key := range inputBody.Keys {
-		offset, err := s.kv.ReadInt(context.Background(), fmt.Sprintf("committed_%v", key))
+		key := key
+		go func() {
+			offset, err := s.kv.ReadInt(context.Background(), fmt.Sprintf("committed_%v", key))
+			if err != nil {
+				mu.Lock()
+				res[key] = offset
+				mu.Unlock()
+			}
+			errChan <- err
+		}()
+	}
+	for range inputBody.Keys {
+		err := <-errChan
 		if err != nil {
-			res[key] = offset
+			return err
 		}
 	}
 
