@@ -69,3 +69,7 @@ Of course, this method sometimes sacrifices availability for simplicity of the i
 ### 5c: Efficient Kafka-Style Log
 
 We already discussed optimizations in the previous exercise.
+
+## 6: Totally-Available Transactions
+
+See [mini-etcd](https://github.com/gAbelli/mini-etcd).
